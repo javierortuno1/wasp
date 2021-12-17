@@ -48,7 +48,7 @@ func (sm *stateManager) notifyChainTransitionIfNeeded() {
 	}
 	sm.log.Debugf("notifyStateTransition: %sstate IS SYNCED to index %d and is approved by output %v",
 		gu, stateOutputIndex, iscp.OID(stateOutputID))
-	sm.chain.TriggerChainTransition(&chain.ChainTransitionEventData{
+	sm.chain.Events().ChainTransition().Trigger(&chain.ChainTransitionEventData{
 		VirtualState:    sm.solidState.Copy(),
 		ChainOutput:     sm.stateOutput,
 		OutputTimestamp: sm.stateOutputTimestamp,
@@ -66,7 +66,7 @@ func (sm *stateManager) pullStateIfNeeded() {
 	nowis := time.Now()
 	if nowis.After(sm.pullStateRetryTime) {
 		chainAliasAddress := sm.chain.ID().AsAliasAddress()
-		sm.nodeConn.PullState()
+		sm.nodeConn.PullState(chainAliasAddress)
 		sm.pullStateRetryTime = nowis.Add(sm.timers.PullStateRetry)
 		sm.log.Debugf("pullState: pulling state for address %v. Next pull in: %v",
 			chainAliasAddress.Base58(), sm.pullStateRetryTime.Sub(nowis))
@@ -127,8 +127,9 @@ func (sm *stateManager) addBlockFromPeer(block state.Block) bool {
 	}
 	if sm.addBlockAndCheckStateOutput(block, nil) {
 		// ask for approving output
-		sm.log.Debugf("addBlockFromPeer: requesting approving output ID %v", iscp.OID(block.ApprovingOutputID()))
-		sm.nodeConn.PullConfirmedOutput(block.ApprovingOutputID())
+		chainAddress := sm.chain.ID().AsAddress()
+		sm.log.Debugf("addBlockFromPeer: requesting approving output ID %v for chain %v", iscp.OID(block.ApprovingOutputID()), chainAddress.Base58())
+		sm.nodeConn.PullConfirmedOutput(chainAddress, block.ApprovingOutputID())
 	}
 	return true
 }

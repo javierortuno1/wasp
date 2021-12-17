@@ -36,8 +36,6 @@ var (
 	FuncSetGasPerIota   = coreutil.Func("setGasPerIota")
 	FuncGetGasPerIota   = coreutil.ViewFunc("getGasPerIota")
 	FuncWithdrawGasFees = coreutil.Func("withdrawGasFees")
-	FuncSetBlockTime    = coreutil.Func("setBlockTime") // only implemented by evmlight
-	FuncMintBlock       = coreutil.Func("mintBlock")    // only implemented by evmlight
 )
 
 const (
@@ -60,13 +58,7 @@ const (
 	FieldGasPerIota              = "w"
 	FieldGasFee                  = "f"
 	FieldGasUsed                 = "gu"
-	FieldGasLimit                = "gl"
 	FieldFilterQuery             = "fq"
-
-	// evmlight only:
-
-	FieldBlockTime       = "bt" // uint32, avg block time in seconds
-	FieldBlockKeepAmount = "bk" // int32
 )
 
 const (
@@ -74,9 +66,6 @@ const (
 
 	DefaultGasPerIota uint64 = 1000
 	GasLimitDefault          = uint64(15000000)
-
-	BlockKeepAll           = -1
-	BlockKeepAmountDefault = BlockKeepAll
 )
 
 var GasPrice = big.NewInt(0)

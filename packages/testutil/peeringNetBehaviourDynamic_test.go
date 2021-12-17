@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/iotaledger/hive.go/logger"
+	"github.com/iotaledger/wasp/packages/peering"
 	"github.com/iotaledger/wasp/packages/testutil/testlogger"
 	"github.com/stretchr/testify/require"
 )
@@ -241,7 +242,7 @@ func testRecvLoop(outCh chan *peeringMsg, durations *[]time.Duration, stopCh cha
 		case <-stopCh:
 			return
 		case msg := <-outCh:
-			*durations = append(*durations, time.Since(time.Unix(0, msg.timestamp)))
+			*durations = append(*durations, time.Since(time.Unix(0, msg.msg.Timestamp)))
 		}
 	}
 }
@@ -256,7 +257,9 @@ func averageDuration(durations []time.Duration) int64 {
 
 func sendMessage(from *peeringNode, inCh chan *peeringMsg) {
 	inCh <- &peeringMsg{
-		from:      from.netID,
-		timestamp: time.Now().UnixNano(),
+		from: from,
+		msg: peering.PeerMessage{
+			Timestamp: time.Now().UnixNano(),
+		},
 	}
 }

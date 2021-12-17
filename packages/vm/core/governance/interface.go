@@ -1,6 +1,3 @@
-// Copyright 2020 IOTA Stiftung
-// SPDX-License-Identifier: Apache-2.0
-
 // in the blocklog core contract the VM keeps indices of blocks and requests in an optimized way
 // for fast checking and timestamp access.
 package governance
@@ -40,12 +37,6 @@ var (
 	FuncSetChainInfo   = coreutil.Func("setChainInfo")
 	FuncGetChainInfo   = coreutil.ViewFunc("getChainInfo")
 	FuncGetMaxBlobSize = coreutil.ViewFunc("getMaxBlobSize")
-
-	// access nodes
-	FuncGetChainNodes     = coreutil.ViewFunc("getChainNodes")
-	FuncAddCandidateNode  = coreutil.Func("addCandidateNode")
-	FuncRevokeAccessNode  = coreutil.Func("revokeAccessNode")
-	FuncChangeAccessNodes = coreutil.Func("changeAccessNodes")
 )
 
 // state variables
@@ -72,11 +63,6 @@ const (
 	VarMaxBlobSize     = "mb"
 	VarMaxEventSize    = "me"
 	VarMaxEventsPerReq = "mr"
-
-	// access nodes
-	VarAccessNodes          = "an"
-	VarAccessNodeCandidates = "ac"
-	VarValidatorNodes       = "vn"
 )
 
 // params
@@ -100,17 +86,4 @@ const (
 	ParamMaxBlobSize         = "bs"
 	ParamMaxEventSize        = "es"
 	ParamMaxEventsPerRequest = "ne"
-
-	// access nodes: getChainNodes
-	ParamGetChainNodesAccessNodeCandidates = "c"
-	ParamGetChainNodesAccessNodes          = "a"
-
-	// access nodes: addCandidateNode
-	ParamAccessNodeInfoForCommittee = "f"
-	ParamAccessNodeInfoPubKey       = "p"
-	ParamAccessNodeInfoCertificate  = "c"
-	ParamAccessNodeInfoAccessAPI    = "a"
-
-	// access nodes: changeAccessNodes
-	ParamChangeAccessNodesActions = "a"
 )

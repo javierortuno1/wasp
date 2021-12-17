@@ -31,7 +31,7 @@ type Request interface {
 	// address of the sender for all requests,
 	SenderAddress() ledgerstate.Address
 	// returns contract/entry point pair
-	Target() RequestTarget
+	Target() (Hname, Hname)
 	// Timestamp returns a request TX timestamp, if such TX exist, otherwise zero is returned.
 	Timestamp() time.Time
 	// Bytes returns binary representation of the request
@@ -40,18 +40,6 @@ type Request interface {
 	Hash() [32]byte
 	// String representation of the request (humanly readable)
 	String() string
-}
-
-type RequestTarget struct {
-	Contract   Hname
-	EntryPoint Hname
-}
-
-func NewRequestTarget(contract, entryPoint Hname) RequestTarget {
-	return RequestTarget{
-		Contract:   contract,
-		EntryPoint: entryPoint,
-	}
 }
 
 func TakeRequestIDs(reqs ...Request) []RequestID {

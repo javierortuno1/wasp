@@ -145,7 +145,7 @@ func (vmctx *VMContext) mustSetUpRequestContext(req iscp.Request, requestIndex u
 		vmctx.remainingAfterFees = vmctx.adjustOffLedgerTransfer()
 	}
 
-	targetContract := req.Target().Contract
+	targetContract, _ := req.Target()
 	var ok bool
 	vmctx.contractRecord, ok = vmctx.findContractByHname(targetContract)
 	if !ok {
@@ -304,7 +304,7 @@ func (vmctx *VMContext) mustCallFromRequest() {
 	vmctx.mustUpdateOffledgerRequestMaxAssumedNonce()
 
 	// calling only non view entry points. Calling the view will trigger error and fallback
-	entryPoint := vmctx.req.Target().EntryPoint
+	_, entryPoint := vmctx.req.Target()
 	targetContract := vmctx.contractRecord.Hname()
 	params, _ := vmctx.req.Params()
 	vmctx.lastResult, vmctx.lastError = vmctx.callNonViewByProgramHash(
@@ -330,9 +330,10 @@ func (vmctx *VMContext) mustFinalizeRequestCall() {
 	vmctx.virtualState.ApplyStateUpdates(vmctx.currentStateUpdate)
 	vmctx.currentStateUpdate = nil
 
+	_, ep := vmctx.req.Target()
 	vmctx.log.Debug("runTheRequest OUT. ",
 		"reqId: ", vmctx.req.ID().Short(),
-		" entry point: ", vmctx.req.Target().EntryPoint.String(),
+		" entry point: ", ep.String(),
 	)
 }
 
@@ -349,8 +350,8 @@ func (vmctx *VMContext) getChainConfigFromState() {
 }
 
 func (vmctx *VMContext) isInitChainRequest() bool {
-	target := vmctx.req.Target()
-	return target.Contract == root.Contract.Hname() && target.EntryPoint == iscp.EntryPointInit
+	targetContract, entryPoint := vmctx.req.Target()
+	return targetContract == root.Contract.Hname() && entryPoint == iscp.EntryPointInit
 }
 
 func isRequestTimeLockedNow(req iscp.Request, nowis time.Time) bool {

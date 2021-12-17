@@ -8,66 +8,64 @@ import (
 	"github.com/iotaledger/wasp/packages/chain/messages"
 	"github.com/iotaledger/wasp/packages/hashing"
 	"github.com/iotaledger/wasp/packages/iscp"
-	"github.com/iotaledger/wasp/packages/peering"
 	"github.com/iotaledger/wasp/packages/state"
 	"github.com/iotaledger/wasp/packages/util"
 )
 
 // EventGetBlockMsg is a request for a block while syncing
-func (sm *stateManager) EnqueueGetBlockMsg(msg *messages.GetBlockMsgIn) {
-	sm.eventGetBlockMsgPipe.In() <- msg
+func (sm *stateManager) EventGetBlockMsg(msg *messages.GetBlockMsg) {
+	sm.eventGetBlockMsgCh <- msg
 }
 
-func (sm *stateManager) handleGetBlockMsg(msg *messages.GetBlockMsgIn) {
-	sm.log.Debugw("handleGetBlockMsg: ",
+func (sm *stateManager) eventGetBlockMsg(msg *messages.GetBlockMsg) {
+	sm.log.Debugw("EventGetBlockMsg received: ",
 		"sender", msg.SenderNetID,
 		"block index", msg.BlockIndex,
 	)
 	if sm.stateOutput == nil { // Not a necessary check, only for optimization.
-		sm.log.Debugf("handleGetBlockMsg: message ignored: stateOutput is nil")
+		sm.log.Debugf("EventGetBlockMsg ignored: stateOutput is nil")
 		return
 	}
 	if msg.BlockIndex > sm.stateOutput.GetStateIndex() { // Not a necessary check, only for optimization.
-		sm.log.Debugf("handleGetBlockMsg: message ignored 1: block #%d not found. Current state index: #%d",
+		sm.log.Debugf("EventGetBlockMsg ignored 1: block #%d not found. Current state index: #%d",
 			msg.BlockIndex, sm.stateOutput.GetStateIndex())
 		return
 	}
 	blockBytes, err := state.LoadBlockBytes(sm.store, msg.BlockIndex)
 	if err != nil {
-		sm.log.Errorf("handleGetBlockMsg: LoadBlockBytes error: %v", err)
+		sm.log.Errorf("EventGetBlockMsg: LoadBlockBytes: %v", err)
 		return
 	}
 	if blockBytes == nil {
-		sm.log.Debugf("handleGetBlockMsg message ignored 2: block #%d not found. Current state index: #%d",
+		sm.log.Debugf("EventGetBlockMsg ignored 2: block #%d not found. Current state index: #%d",
 			msg.BlockIndex, sm.stateOutput.GetStateIndex())
 		return
 	}
 
-	sm.log.Debugf("handleGetBlockMsg: responding to peer %s by block %v", msg.SenderNetID, msg.BlockIndex)
+	sm.log.Debugf("EventGetBlockMsg for state index #%d --> responding to peer %s", msg.BlockIndex, msg.SenderNetID)
 
-	blockMsg := &messages.BlockMsg{BlockBytes: blockBytes}
-	sm.chainPeers.SendMsgByNetID(msg.SenderNetID, peering.PeerMessageReceiverStateManager, peerMsgTypeBlock, util.MustBytes(blockMsg))
+	sm.peers.SendSimple(msg.SenderNetID, messages.MsgBlock, util.MustBytes(&messages.BlockMsg{
+		BlockBytes: blockBytes,
+	}))
 }
 
 // EventBlockMsg
-func (sm *stateManager) EnqueueBlockMsg(msg *messages.BlockMsgIn) {
-	sm.eventBlockMsgPipe.In() <- msg
+func (sm *stateManager) EventBlockMsg(msg *messages.BlockMsg) {
+	sm.eventBlockMsgCh <- msg
 }
 
-func (sm *stateManager) handleBlockMsg(msg *messages.BlockMsgIn) {
-	sm.log.Debugw("handleBlockMsg: ",
-		"sender", msg.SenderNetID,
-	)
+func (sm *stateManager) eventBlockMsg(msg *messages.BlockMsg) {
+	sm.log.Debugf("EventBlockMsg received from %v", msg.SenderNetID)
 	if sm.stateOutput == nil {
-		sm.log.Debugf("handleBlockMsg: message ignored: stateOutput is nil")
+		sm.log.Debugf("EventBlockMsg ignored: stateOutput is nil")
 		return
 	}
 	block, err := state.BlockFromBytes(msg.BlockBytes)
 	if err != nil {
-		sm.log.Warnf("handleBlockMsg: message ignored: wrong block received from peer %s. Err: %v", msg.SenderNetID, err)
+		sm.log.Warnf("EventBlockMsg ignored: wrong block received from peer %s. Err: %v", msg.SenderNetID, err)
 		return
 	}
-	sm.log.Debugw("handleBlockMsg: adding block from peer ",
+	sm.log.Debugw("EventBlockMsg from ",
 		"sender", msg.SenderNetID,
 		"block index", block.BlockIndex(),
 		"approving output", iscp.OID(block.ApprovingOutputID()),
@@ -77,11 +75,11 @@ func (sm *stateManager) handleBlockMsg(msg *messages.BlockMsgIn) {
 	}
 }
 
-func (sm *stateManager) EnqueueOutputMsg(msg ledgerstate.Output) {
-	sm.eventOutputMsgPipe.In() <- msg
+func (sm *stateManager) EventOutputMsg(msg ledgerstate.Output) {
+	sm.eventOutputMsgCh <- msg
 }
 
-func (sm *stateManager) handleOutputMsg(msg ledgerstate.Output) {
+func (sm *stateManager) eventOutputMsg(msg ledgerstate.Output) {
 	sm.log.Debugf("EventOutputMsg received: %s", iscp.OID(msg.ID()))
 	chainOutput, ok := msg.(*ledgerstate.AliasOutput)
 	if !ok {
@@ -95,11 +93,11 @@ func (sm *stateManager) handleOutputMsg(msg ledgerstate.Output) {
 
 // EventStateTransactionMsg triggered whenever new state transaction arrives
 // the state transaction may be confirmed or not
-func (sm *stateManager) EnqueueStateMsg(msg *messages.StateMsg) {
-	sm.eventStateOutputMsgPipe.In() <- msg
+func (sm *stateManager) EventStateMsg(msg *messages.StateMsg) {
+	sm.eventStateOutputMsgCh <- msg
 }
 
-func (sm *stateManager) handleStateMsg(msg *messages.StateMsg) {
+func (sm *stateManager) eventStateMsg(msg *messages.StateMsg) {
 	sm.log.Debugw("EventStateMsg received: ",
 		"state index", msg.ChainOutput.GetStateIndex(),
 		"chainOutput", iscp.OID(msg.ChainOutput.ID()),
@@ -115,14 +113,11 @@ func (sm *stateManager) handleStateMsg(msg *messages.StateMsg) {
 	}
 }
 
-func (sm *stateManager) EnqueueStateCandidateMsg(virtualState state.VirtualStateAccess, outputID ledgerstate.OutputID) {
-	sm.eventStateCandidateMsgPipe.In() <- &messages.StateCandidateMsg{
-		State:             virtualState,
-		ApprovingOutputID: outputID,
-	}
+func (sm *stateManager) EventStateCandidateMsg(msg *messages.StateCandidateMsg) {
+	sm.eventStateCandidateMsgCh <- msg
 }
 
-func (sm *stateManager) handleStateCandidateMsg(msg *messages.StateCandidateMsg) {
+func (sm *stateManager) eventStateCandidateMsg(msg *messages.StateCandidateMsg) {
 	sm.log.Debugf("EventStateCandidateMsg received: state index: %d, timestamp: %v",
 		msg.State.BlockIndex(), msg.State.Timestamp(),
 	)
@@ -135,13 +130,13 @@ func (sm *stateManager) handleStateCandidateMsg(msg *messages.StateCandidateMsg)
 	}
 }
 
-func (sm *stateManager) EnqueueTimerMsg(msg messages.TimerTick) {
+func (sm *stateManager) EventTimerMsg(msg messages.TimerTick) {
 	if msg%2 == 0 {
-		sm.eventTimerMsgPipe.In() <- msg
+		sm.eventTimerMsgCh <- msg
 	}
 }
 
-func (sm *stateManager) handleTimerMsg() {
+func (sm *stateManager) eventTimerMsg() {
 	sm.log.Debugf("EventTimerMsg received")
 	sm.takeAction()
 }

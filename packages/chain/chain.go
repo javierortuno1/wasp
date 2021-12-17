@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/iotaledger/wasp/packages/iscp/request"
+
 	"github.com/iotaledger/goshimmer/packages/ledgerstate"
 	"github.com/iotaledger/hive.go/events"
 	"github.com/iotaledger/hive.go/logger"
@@ -14,7 +16,7 @@ import (
 	"github.com/iotaledger/wasp/packages/hashing"
 	"github.com/iotaledger/wasp/packages/iscp"
 	"github.com/iotaledger/wasp/packages/iscp/coreutil"
-	"github.com/iotaledger/wasp/packages/metrics/nodeconnmetrics"
+	"github.com/iotaledger/wasp/packages/peering"
 	"github.com/iotaledger/wasp/packages/state"
 	"github.com/iotaledger/wasp/packages/tcrypto"
 	"github.com/iotaledger/wasp/packages/util/ready"
@@ -24,27 +26,21 @@ import (
 type ChainCore interface {
 	ID() *iscp.ChainID
 	GetCommitteeInfo() *CommitteeInfo
-	StateCandidateToStateManager(state.VirtualStateAccess, ledgerstate.OutputID)
-	TriggerChainTransition(*ChainTransitionEventData)
+	ReceiveMessage(interface{})
+	Events() ChainEvents
 	Processors() *processors.Cache
 	GlobalStateSync() coreutil.ChainStateSync
 	GetStateReader() state.OptimisticStateReader
 	Log() *logger.Logger
-
-	// Most of these methods are made public for mocking in tests
-	EnqueueDismissChain(reason string) // This one should really be public
-	EnqueueLedgerState(chainOutput *ledgerstate.AliasOutput, timestamp time.Time)
-	EnqueueOffLedgerRequestMsg(msg *messages.OffLedgerRequestMsgIn)
-	EnqueueRequestAckMsg(msg *messages.RequestAckMsgIn)
-	EnqueueMissingRequestIDsMsg(msg *messages.MissingRequestIDsMsgIn)
-	EnqueueMissingRequestMsg(msg *messages.MissingRequestMsg)
-	EnqueueTimerTick(tick int)
 }
 
 // ChainEntry interface to access chain from the chain registry side
 type ChainEntry interface {
 	ReceiveTransaction(*ledgerstate.Transaction)
+	ReceiveInclusionState(ledgerstate.TransactionID, ledgerstate.InclusionState)
 	ReceiveState(stateOutput *ledgerstate.AliasOutput, timestamp time.Time)
+	ReceiveOutput(output ledgerstate.Output)
+	ReceiveOffLedgerRequest(req *request.OffLedger, senderNetID string)
 
 	Dismiss(reason string)
 	IsDismissed() bool
@@ -53,19 +49,18 @@ type ChainEntry interface {
 // ChainRequests is an interface to query status of the request
 type ChainRequests interface {
 	GetRequestProcessingStatus(id iscp.RequestID) RequestProcessingStatus
-	AttachToRequestProcessed(func(iscp.RequestID)) (attachID *events.Closure)
-	DetachFromRequestProcessed(attachID *events.Closure)
+	EventRequestProcessed() *events.Event
 }
 
-type ChainMetrics interface {
-	GetNodeConnectionMetrics() nodeconnmetrics.NodeConnectionMessagesMetrics
+type ChainEvents interface {
+	RequestProcessed() *events.Event
+	ChainTransition() *events.Event
 }
 
 type Chain interface {
 	ChainCore
 	ChainRequests
 	ChainEntry
-	ChainMetrics
 }
 
 // Committee is ordered (indexed 0..size-1) list of peers which run the consensus
@@ -75,9 +70,12 @@ type Committee interface {
 	Quorum() uint16
 	OwnPeerIndex() uint16
 	DKShare() *tcrypto.DKShare
+	SendMsg(targetPeerIndex uint16, msgType byte, msgData []byte) error
+	SendMsgToPeers(msgType byte, msgData []byte, ts int64, except ...uint16)
 	IsAlivePeer(peerIndex uint16) bool
 	QuorumIsAlive(quorum ...uint16) bool
 	PeerStatus() []*PeerStatus
+	Attach(chain ChainCore)
 	IsReady() bool
 	Close()
 	RunACSConsensus(value []byte, sessionID uint64, stateIndex uint32, callback func(sessionID uint64, acs [][]byte))
@@ -85,76 +83,35 @@ type Committee interface {
 	GetRandomValidators(upToN int) []string
 }
 
-type (
-	NodeConnectionHandleTransactionFun        func(*ledgerstate.Transaction)
-	NodeConnectionHandleInclusionStateFun     func(ledgerstate.TransactionID, ledgerstate.InclusionState)
-	NodeConnectionHandleOutputFun             func(ledgerstate.Output)
-	NodeConnectionHandleUnspentAliasOutputFun func(*ledgerstate.AliasOutput, time.Time)
-)
-
 type NodeConnection interface {
-	Subscribe(addr ledgerstate.Address)
-	Unsubscribe(addr ledgerstate.Address)
-
-	AttachToTransactionReceived(*ledgerstate.AliasAddress, NodeConnectionHandleTransactionFun)
-	AttachToInclusionStateReceived(*ledgerstate.AliasAddress, NodeConnectionHandleInclusionStateFun)
-	AttachToOutputReceived(*ledgerstate.AliasAddress, NodeConnectionHandleOutputFun)
-	AttachToUnspentAliasOutputReceived(*ledgerstate.AliasAddress, NodeConnectionHandleUnspentAliasOutputFun)
-
+	PullBacklog(addr *ledgerstate.AliasAddress)
 	PullState(addr *ledgerstate.AliasAddress)
+	PullConfirmedTransaction(addr ledgerstate.Address, txid ledgerstate.TransactionID)
 	PullTransactionInclusionState(addr ledgerstate.Address, txid ledgerstate.TransactionID)
 	PullConfirmedOutput(addr ledgerstate.Address, outputID ledgerstate.OutputID)
 	PostTransaction(tx *ledgerstate.Transaction)
-
-	GetMetrics() nodeconnmetrics.NodeConnectionMetrics
-
-	DetachFromTransactionReceived(*ledgerstate.AliasAddress)
-	DetachFromInclusionStateReceived(*ledgerstate.AliasAddress)
-	DetachFromOutputReceived(*ledgerstate.AliasAddress)
-	DetachFromUnspentAliasOutputReceived(*ledgerstate.AliasAddress)
-	Close()
-}
-
-type ChainNodeConnection interface {
-	AttachToTransactionReceived(NodeConnectionHandleTransactionFun)
-	AttachToInclusionStateReceived(NodeConnectionHandleInclusionStateFun)
-	AttachToOutputReceived(NodeConnectionHandleOutputFun)
-	AttachToUnspentAliasOutputReceived(NodeConnectionHandleUnspentAliasOutputFun)
-
-	PullState()
-	PullTransactionInclusionState(txid ledgerstate.TransactionID)
-	PullConfirmedOutput(outputID ledgerstate.OutputID)
-	PostTransaction(tx *ledgerstate.Transaction)
-
-	GetMetrics() nodeconnmetrics.NodeConnectionMessagesMetrics
-
-	DetachFromTransactionReceived()
-	DetachFromInclusionStateReceived()
-	DetachFromOutputReceived()
-	DetachFromUnspentAliasOutputReceived()
-	Close()
 }
 
 type StateManager interface {
 	Ready() *ready.Ready
-	EnqueueGetBlockMsg(msg *messages.GetBlockMsgIn)
-	EnqueueBlockMsg(msg *messages.BlockMsgIn)
-	EnqueueStateMsg(msg *messages.StateMsg)
-	EnqueueOutputMsg(msg ledgerstate.Output)
-	EnqueueStateCandidateMsg(state.VirtualStateAccess, ledgerstate.OutputID)
-	EnqueueTimerMsg(msg messages.TimerTick)
+	EventGetBlockMsg(msg *messages.GetBlockMsg)
+	EventBlockMsg(msg *messages.BlockMsg)
+	EventStateMsg(msg *messages.StateMsg)
+	EventOutputMsg(msg ledgerstate.Output)
+	EventStateCandidateMsg(msg *messages.StateCandidateMsg)
+	EventTimerMsg(msg messages.TimerTick)
 	GetStatusSnapshot() *SyncInfo
 	Close()
 }
 
 type Consensus interface {
-	EnqueueStateTransitionMsg(state.VirtualStateAccess, *ledgerstate.AliasOutput, time.Time)
-	EnqueueSignedResultMsg(*messages.SignedResultMsgIn)
-	EnqueueSignedResultAckMsg(*messages.SignedResultAckMsgIn)
-	EnqueueInclusionsStateMsg(ledgerstate.TransactionID, ledgerstate.InclusionState)
-	EnqueueAsynchronousCommonSubsetMsg(msg *messages.AsynchronousCommonSubsetMsg)
-	EnqueueVMResultMsg(msg *messages.VMResultMsg)
-	EnqueueTimerMsg(messages.TimerTick)
+	EventStateTransitionMsg(*messages.StateTransitionMsg)
+	EventSignedResultMsg(*messages.SignedResultMsg)
+	EventSignedResultAckMsg(*messages.SignedResultAckMsg)
+	EventInclusionsStateMsg(*messages.InclusionStateMsg)
+	EventAsynchronousCommonSubsetMsg(msg *messages.AsynchronousCommonSubsetMsg)
+	EventVMResultMsg(msg *messages.VMResultMsg)
+	EventTimerMsg(messages.TimerTick)
 	IsReady() bool
 	Close()
 	GetStatusSnapshot() *ConsensusInfo
@@ -177,6 +134,7 @@ type Mempool interface {
 
 type AsynchronousCommonSubsetRunner interface {
 	RunACSConsensus(value []byte, sessionID uint64, stateIndex uint32, callback func(sessionID uint64, acs [][]byte))
+	TryHandleMessage(recv *peering.RecvEvent) bool
 	Close()
 }
 
@@ -247,11 +205,4 @@ const (
 const (
 	// TimerTickPeriod time tick for consensus and state manager objects
 	TimerTickPeriod = 100 * time.Millisecond
-)
-
-const (
-	PeerMsgTypeMissingRequestIDs = iota
-	PeerMsgTypeMissingRequest
-	PeerMsgTypeOffLedgerRequest
-	PeerMsgTypeRequestAck
 )

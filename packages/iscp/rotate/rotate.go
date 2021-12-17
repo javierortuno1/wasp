@@ -17,14 +17,14 @@ import (
 
 // IsRotateStateControllerRequest determines if request may be a committee rotation request
 func IsRotateStateControllerRequest(req iscp.Request) bool {
-	target := req.Target()
-	return target.Contract == coreutil.CoreContractGovernanceHname && target.EntryPoint == coreutil.CoreEPRotateStateControllerHname
+	targetContract, targetEP := req.Target()
+	return targetContract == coreutil.CoreContractGovernanceHname && targetEP == coreutil.CoreEPRotateStateControllerHname
 }
 
-func NewRotateRequestOffLedger(chainID *iscp.ChainID, newStateAddress ledgerstate.Address, keyPair *ed25519.KeyPair) *request.OffLedger {
+func NewRotateRequestOffLedger(newStateAddress ledgerstate.Address, keyPair *ed25519.KeyPair) iscp.Request {
 	args := requestargs.New(nil)
 	args.AddEncodeSimple(coreutil.ParamStateControllerAddress, codec.EncodeAddress(newStateAddress))
-	ret := request.NewOffLedger(chainID, coreutil.CoreContractGovernanceHname, coreutil.CoreEPRotateStateControllerHname, args)
+	ret := request.NewOffLedger(coreutil.CoreContractGovernanceHname, coreutil.CoreEPRotateStateControllerHname, args)
 	ret.Sign(keyPair)
 	return ret
 }

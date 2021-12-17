@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/iotaledger/hive.go/events"
 	"github.com/iotaledger/wasp/packages/chain"
 	"github.com/iotaledger/wasp/packages/chains"
 	"github.com/iotaledger/wasp/packages/iscp"
@@ -76,12 +77,13 @@ func (r *reqstatusWebAPI) handleWaitRequestProcessed(c echo.Context) error {
 
 	// subscribe to event
 	requestProcessed := make(chan bool)
-	attachID := ch.AttachToRequestProcessed(func(rid iscp.RequestID) {
+	handler := events.NewClosure(func(rid iscp.RequestID) {
 		if rid == reqID {
 			requestProcessed <- true
 		}
 	})
-	defer ch.DetachFromRequestProcessed(attachID)
+	ch.EventRequestProcessed().Attach(handler)
+	defer ch.EventRequestProcessed().Detach(handler)
 
 	select {
 	case <-requestProcessed:

@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/iotaledger/hive.go/logger"
+	"github.com/iotaledger/wasp/packages/peering"
 )
 
 type MockedACSRunner struct {
@@ -52,6 +53,10 @@ func (acs *MockedACSRunner) RunACSConsensus(value []byte, sessionID uint64, stat
 			go fun(sessionID, session.values)
 		}
 	}
+}
+
+func (acs *MockedACSRunner) TryHandleMessage(recv *peering.RecvEvent) bool {
+	return false
 }
 
 func (acs *MockedACSRunner) Close() {

@@ -16,8 +16,6 @@ import (
 const (
 	futureInstances = 5 // How many future instances to accept.
 	pastInstances   = 2 // How many past instance to keep not closed.
-
-	peerMsgTypeBatch = iota
 )
 
 // CommonSubsetCoordinator is responsible for maintaining a series of ACS
@@ -44,38 +42,37 @@ const (
 // until they will be discarded because of the growing StateIndex in the new branch.
 //
 type CommonSubsetCoordinator struct {
-	csInsts                     map[uint64]*CommonSubset // The actual instances can be created on request or on peer message.
-	csAsked                     map[uint64]bool          // Indicates, which instances are already asked by this nodes.
-	currentStateIndex           uint32                   // Last state index passed by this node.
-	receivePeerMessagesAttachID interface{}
-	lock                        sync.RWMutex
+	csInsts           map[uint64]*CommonSubset // The actual instances can be created on request or on peer message.
+	csAsked           map[uint64]bool          // Indicates, which instances are already asked by this nodes.
+	currentStateIndex uint32                   // Last state index passed by this node.
+	lock              sync.RWMutex
 
-	netGroup peering.GroupProvider
-	dkShare  *tcrypto.DKShare
-	log      *logger.Logger
+	peeringID peering.PeeringID
+	netGroup  peering.GroupProvider
+	dkShare   *tcrypto.DKShare
+	log       *logger.Logger
 }
 
 func NewCommonSubsetCoordinator(
+	peeringID peering.PeeringID,
 	net peering.NetworkProvider,
 	netGroup peering.GroupProvider,
 	dkShare *tcrypto.DKShare,
 	log *logger.Logger,
 ) *CommonSubsetCoordinator {
-	ret := &CommonSubsetCoordinator{
-		csInsts:  make(map[uint64]*CommonSubset),
-		csAsked:  make(map[uint64]bool),
-		lock:     sync.RWMutex{},
-		netGroup: netGroup,
-		dkShare:  dkShare,
-		log:      log,
+	return &CommonSubsetCoordinator{
+		csInsts:   make(map[uint64]*CommonSubset),
+		csAsked:   make(map[uint64]bool),
+		lock:      sync.RWMutex{},
+		peeringID: peeringID,
+		netGroup:  netGroup,
+		dkShare:   dkShare,
+		log:       log,
 	}
-	ret.receivePeerMessagesAttachID = ret.netGroup.Attach(peering.PeerMessageReceiverCommonSubset, ret.receiveCommitteePeerMessages)
-	return ret
 }
 
 // Close implements the AsynchronousCommonSubsetRunner interface.
 func (csc *CommonSubsetCoordinator) Close() {
-	csc.netGroup.Detach(csc.receivePeerMessagesAttachID)
 	for i := range csc.csInsts {
 		csc.csInsts[i].Close()
 	}
@@ -107,23 +104,24 @@ func (csc *CommonSubsetCoordinator) RunACSConsensus(
 
 // TryHandleMessage implements the AsynchronousCommonSubsetRunner interface.
 // It handles the network messages, if they are of correct type.
-func (csc *CommonSubsetCoordinator) receiveCommitteePeerMessages(peerMsg *peering.PeerMessageGroupIn) {
-	if peerMsg.MsgType != peerMsgTypeBatch {
-		csc.log.Warnf("Wrong type of committee message: %v, ignoring it", peerMsg.MsgType)
-		return
+func (csc *CommonSubsetCoordinator) TryHandleMessage(recv *peering.RecvEvent) bool {
+	if recv.Msg.MsgType != acsMsgType {
+		return false
 	}
-	mb, err := newMsgBatch(peerMsg.MsgData)
-	if err != nil {
-		csc.log.Error(err)
-		return
+	mb := msgBatch{}
+	if err := mb.FromBytes(recv.Msg.MsgData); err != nil {
+		csc.log.Errorf("Cannot decode message: %v", err)
+		return true
 	}
-	csc.log.Debugf("ACS::IO - Received a msgBatch=%+v", *mb)
+	csc.log.Debugf("ACS::IO - Received a msgBatch=%+v", mb)
+	var err error
 	var cs *CommonSubset
 	if cs, err = csc.getOrCreateCS(mb.sessionID, mb.stateIndex, nil); err != nil {
 		csc.log.Debugf("Unable to get a CommonSubset instance for sessionID=%v, reason=%v", mb.sessionID, err)
-		return
+		return true
 	}
-	cs.HandleMsgBatch(mb)
+	cs.HandleMsgBatch(&mb)
+	return true
 }
 
 func (csc *CommonSubsetCoordinator) getOrCreateCS(
@@ -169,7 +167,7 @@ func (csc *CommonSubsetCoordinator) getOrCreateCS(
 		var err error
 		var newCS *CommonSubset
 		outCh := make(chan map[uint16][]byte, 1)
-		if newCS, err = NewCommonSubset(sessionID, stateIndex, csc.netGroup, csc.dkShare, false, outCh, csc.log); err != nil {
+		if newCS, err = NewCommonSubset(sessionID, stateIndex, csc.peeringID, csc.netGroup, csc.dkShare, false, outCh, csc.log); err != nil {
 			return nil, err
 		}
 		csc.csInsts[sessionID] = newCS

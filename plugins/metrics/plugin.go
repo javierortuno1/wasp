@@ -16,7 +16,7 @@ var (
 )
 
 func Init() *node.Plugin {
-	return node.NewPlugin(PluginName, node.Enabled, configure, run)
+	return node.NewPlugin(PluginName, node.Disabled, configure, run)
 }
 
 func configure(_ *node.Plugin) {

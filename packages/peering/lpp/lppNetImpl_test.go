@@ -53,16 +53,15 @@ func TestLPPPeeringImpl(t *testing.T) {
 	n2p0, err := nodes[2].PeerByNetID(netIDs[0])
 	require.NoError(t, err)
 
-	chain1 := peering.RandomPeeringID()
-	chain2 := peering.RandomPeeringID()
-	receiver := byte(3)
-	nodes[0].Attach(&chain2, receiver, func(recv *peering.PeerMessageIn) {
+	nodes[0].Attach(nil, func(recv *peering.RecvEvent) {
 		doneCh <- true
 	})
 
-	n0p2.SendMsg(&peering.PeerMessageData{PeeringID: chain1, MsgReceiver: receiver, MsgType: 125})
-	n1p1.SendMsg(&peering.PeerMessageData{PeeringID: chain1, MsgReceiver: receiver, MsgType: 125})
-	n2p0.SendMsg(&peering.PeerMessageData{PeeringID: chain2, MsgReceiver: receiver, MsgType: 125})
+	chain1 := peering.RandomPeeringID()
+	chain2 := peering.RandomPeeringID()
+	n0p2.SendMsg(&peering.PeerMessage{PeeringID: chain1, MsgType: 125})
+	n1p1.SendMsg(&peering.PeerMessage{PeeringID: chain1, MsgType: 125})
+	n2p0.SendMsg(&peering.PeerMessage{PeeringID: chain2, MsgType: 125})
 
 	<-doneCh
 	time.Sleep(100 * time.Millisecond)

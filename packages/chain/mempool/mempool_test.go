@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/iotaledger/wasp/packages/iscp/colored"
-	"go.uber.org/zap/zapcore"
 
 	"github.com/iotaledger/goshimmer/packages/ledgerstate"
 	"github.com/iotaledger/goshimmer/packages/ledgerstate/utxodb"
@@ -26,6 +25,7 @@ import (
 	"github.com/iotaledger/wasp/packages/vm/core/blocklog"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func createStateReader(t *testing.T, glb coreutil.ChainStateSync) (state.OptimisticStateReader, state.VirtualStateAccess) {
@@ -86,8 +86,6 @@ func (m *MockMempoolMetrics) CountRequestOut() {
 
 func (m *MockMempoolMetrics) RecordRequestProcessingTime(reqID iscp.RequestID, elapse time.Duration) {
 }
-
-func (m *MockMempoolMetrics) CountBlocksPerChain() {}
 
 // Test if mempool is created
 func TestMempool(t *testing.T) {
@@ -185,7 +183,8 @@ func TestAddRequestTwice(t *testing.T) {
 	require.EqualValues(t, 1, stats.ReadyCounter)
 }
 
-// Test if adding off ledger requests works as expected
+// Test if adding off ledger requests works as expected: correctly signed ones
+// are added, others are ignored
 func TestAddOffLedgerRequest(t *testing.T) {
 	log := testlogger.NewLogger(t)
 	testlogger.WithLevel(log, zapcore.InfoLevel, false)
@@ -197,21 +196,32 @@ func TestAddOffLedgerRequest(t *testing.T) {
 	onLedgerRequests, keyPair := getRequestsOnLedger(t, 2)
 
 	offFromOnLedgerFun := func(onLedger *request.OnLedger) *request.OffLedger {
-		target := onLedger.Target()
-		return request.NewOffLedger(iscp.RandomChainID(), target.Contract, target.EntryPoint, onLedger.GetMetadata().Args())
+		contract, emptyPoint := onLedger.Target()
+		return request.NewOffLedger(contract, emptyPoint, onLedger.GetMetadata().Args())
 	}
+	offLedgerRequestUnsigned := offFromOnLedgerFun(onLedgerRequests[0])
 	offLedgerRequestSigned := offFromOnLedgerFun(onLedgerRequests[1])
 	offLedgerRequestSigned.Sign(keyPair)
+	require.NotEqual(t, offLedgerRequestUnsigned.ID(), offLedgerRequestSigned.ID())
 
 	require.EqualValues(t, 0, mempoolMetrics.offLedgerRequestCounter)
+	pool.ReceiveRequests(offLedgerRequestUnsigned)
+	require.False(t, pool.WaitRequestInPool(offLedgerRequestUnsigned.ID(), 200*time.Millisecond))
+	stats := pool.Info()
+	require.EqualValues(t, 0, stats.InPoolCounter)
+	require.EqualValues(t, 0, stats.OutPoolCounter)
+	require.EqualValues(t, 0, stats.TotalPool)
+	require.EqualValues(t, 0, stats.ReadyCounter)
+	require.EqualValues(t, 1, mempoolMetrics.offLedgerRequestCounter)
+
 	pool.ReceiveRequests(offLedgerRequestSigned)
 	require.True(t, pool.WaitRequestInPool(offLedgerRequestSigned.ID(), 200*time.Millisecond))
-	stats := pool.Info()
+	stats = pool.Info()
 	require.EqualValues(t, 1, stats.InPoolCounter)
 	require.EqualValues(t, 0, stats.OutPoolCounter)
 	require.EqualValues(t, 1, stats.TotalPool)
 	require.EqualValues(t, 1, stats.ReadyCounter)
-	require.EqualValues(t, 1, mempoolMetrics.offLedgerRequestCounter)
+	require.EqualValues(t, 2, mempoolMetrics.offLedgerRequestCounter)
 }
 
 // Test if processed request cannot be added to mempool
@@ -448,7 +458,7 @@ func TestFallbackOptions(t *testing.T) {
 	// request with the invalid deadline should have been removed from the mempool
 	time.Sleep(500 * time.Millisecond) // just to let the `RemoveRequests` go routine get the pool mutex before we look into it
 	require.Nil(t, pool.GetRequest(requests[2].ID()))
-	require.Len(t, pool.(*mempool).pool, 2)
+	require.Len(t, pool.pool, 2)
 }
 
 // Test if ReadyFromIDs function correctly handle non-existing or removed IDs
@@ -613,10 +623,10 @@ func TestRotateRequest(t *testing.T) {
 	require.True(t, len(ready) == 5)
 
 	kp, addr := testkey.GenKeyAddr()
-	rotateReq := rotate.NewRotateRequestOffLedger(iscp.RandomChainID(), addr, kp)
+	rotateReq := rotate.NewRotateRequestOffLedger(addr, kp)
 	require.True(t, rotate.IsRotateStateControllerRequest(rotateReq))
 
-	pool.ReceiveRequest(rotateReq)
+	pool.ReceiveRequests(rotateReq)
 	require.True(t, pool.WaitRequestInPool(rotateReq.ID()))
 	require.True(t, pool.HasRequest(rotateReq.ID()))
 

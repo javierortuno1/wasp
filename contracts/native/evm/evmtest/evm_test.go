@@ -7,14 +7,12 @@ import (
 	"bytes"
 	"math/big"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/iotaledger/wasp/contracts/native/evm"
 	"github.com/iotaledger/wasp/contracts/native/evm/evmchain"
 	"github.com/iotaledger/wasp/contracts/native/evm/evmlight"
-	"github.com/iotaledger/wasp/packages/chain"
 	"github.com/iotaledger/wasp/packages/evm/evmflavors"
 	"github.com/iotaledger/wasp/packages/evm/evmtest"
 	"github.com/iotaledger/wasp/packages/iscp"
@@ -47,7 +45,6 @@ func TestStorageContract(t *testing.T) {
 
 		// deploy solidity `storage` contract
 		storage := evmChain.deployStorageContract(evmChain.faucetKey, 42)
-		require.EqualValues(t, 1, evmChain.getBlockNumber())
 
 		// call FuncCallView to call EVM contract's `retrieve` view, get 42
 		require.EqualValues(t, 42, storage.retrieve())
@@ -56,7 +53,6 @@ func TestStorageContract(t *testing.T) {
 		res, err := storage.store(43)
 		require.NoError(t, err)
 		require.Equal(t, types.ReceiptStatusSuccessful, res.receipt.Status)
-		require.EqualValues(t, 2, evmChain.getBlockNumber())
 
 		// call `retrieve` view, get 43
 		require.EqualValues(t, 43, storage.retrieve())
@@ -218,7 +214,7 @@ func TestGasPerIotas(t *testing.T) {
 		newGasPerIota := evm.DefaultGasPerIota * 1000
 		newUserWallet, _ := evmChain.solo.NewKeyPairWithFunds()
 		err = evmChain.setGasPerIotas(newGasPerIota, iotaCallOptions{wallet: newUserWallet})
-		require.Contains(t, err.Error(), "unauthorized access")
+		require.Contains(t, err.Error(), "can only be called by the contract owner")
 		require.Equal(t, evm.DefaultGasPerIota, evmChain.getGasPerIotas())
 
 		// current owner is able to set a new gasPerIotas
@@ -243,7 +239,7 @@ func TestWithdrawalOwnerFees(t *testing.T) {
 		user1AgentID := iscp.NewAgentID(user1Address, 0)
 
 		err := evmChain.withdrawGasFees(user1Wallet)
-		require.Contains(t, err.Error(), "unauthorized access")
+		require.Contains(t, err.Error(), "can only be called by the contract owner")
 
 		// change owner to user1
 		err = evmChain.setNextOwner(user1AgentID)
@@ -442,48 +438,6 @@ func TestISCPEntropy(t *testing.T) {
 	require.NotEqualValues(t, entropy, make([]byte, 32))
 }
 
-func TestBlockTime(t *testing.T) {
-	evmChain := initEVMChain(t, evmlight.Contract)
-	evmChain.setBlockTime(60)
-
-	storage := evmChain.deployStorageContract(evmChain.faucetKey, 42)
-	require.EqualValues(t, 42, storage.retrieve())
-	require.EqualValues(t, 0, evmChain.getBlockNumber())
-
-	res, err := storage.store(43)
-	require.NoError(t, err)
-	require.Equal(t, types.ReceiptStatusSuccessful, res.receipt.Status)
-
-	require.EqualValues(t, 43, storage.retrieve())
-	require.EqualValues(t, 0, evmChain.getBlockNumber())
-
-	// there is 1 timelocked request
-	mempoolInfo := evmChain.soloChain.MempoolInfo()
-	require.EqualValues(t, 1, mempoolInfo.InBufCounter-mempoolInfo.OutPoolCounter)
-
-	// first block gets minted
-	evmChain.solo.AdvanceClockBy(61 * time.Second)
-	evmChain.soloChain.WaitUntil(func(mstats chain.MempoolInfo) bool {
-		return mstats.OutPoolCounter == mempoolInfo.InBufCounter
-	})
-	require.EqualValues(t, 1, evmChain.getBlockNumber())
-	block := evmChain.getBlockByNumber(1)
-	require.EqualValues(t, 2, len(block.Transactions()))
-
-	// there is 1 timelocked request
-	mempoolInfo = evmChain.soloChain.MempoolInfo()
-	require.EqualValues(t, 1, mempoolInfo.InBufCounter-mempoolInfo.OutPoolCounter)
-
-	// second (empty) block gets minted
-	evmChain.solo.AdvanceClockBy(61 * time.Second)
-	evmChain.soloChain.WaitUntil(func(mstats chain.MempoolInfo) bool {
-		return mstats.OutPoolCounter == mempoolInfo.InBufCounter
-	})
-	require.EqualValues(t, 2, evmChain.getBlockNumber())
-	block = evmChain.getBlockByNumber(2)
-	require.EqualValues(t, 0, len(block.Transactions()))
-}
-
 func initBenchmark(b *testing.B, evmFlavor *coreutil.ContractInfo) (*solo.Chain, []*solo.CallParams) {
 	// setup: deploy the EVM chain
 	log := testlogger.NewSilentLogger(b.Name(), true)
@@ -512,8 +466,8 @@ func initBenchmark(b *testing.B, evmFlavor *coreutil.ContractInfo) (*solo.Chain,
 // run benchmarks with: go test -benchmem -cpu=1 -run=' ' -bench='Bench.*'
 
 func doBenchmark(b *testing.B, evmFlavor *coreutil.ContractInfo, f solobench.Func) {
-	ch, reqs := initBenchmark(b, evmFlavor)
-	f(b, ch, reqs, nil)
+	chain, reqs := initBenchmark(b, evmFlavor)
+	f(b, chain, reqs, nil)
 }
 
 func BenchmarkEVMChainSync(b *testing.B) {

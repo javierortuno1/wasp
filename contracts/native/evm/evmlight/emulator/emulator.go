@@ -5,6 +5,7 @@ package emulator
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum"
@@ -63,12 +64,12 @@ func newBlockchainDB(store kv.KVStore) *BlockchainDB {
 }
 
 // Init initializes the EVM state with the provided genesis allocation parameters
-func Init(store kv.KVStore, chainID uint16, blockKeepAmount int32, gasLimit, timestamp uint64, alloc core.GenesisAlloc) {
+func Init(store kv.KVStore, chainID uint16, gasLimit, timestamp uint64, alloc core.GenesisAlloc) {
 	bdb := newBlockchainDB(store)
 	if bdb.Initialized() {
 		panic("evm state already initialized in kvstore")
 	}
-	bdb.Init(chainID, blockKeepAmount, gasLimit, timestamp)
+	bdb.Init(chainID, gasLimit, timestamp)
 
 	statedb := newStateDB(store)
 	for addr, account := range alloc {
@@ -178,7 +179,7 @@ func (e *EVMEmulator) EstimateGas(call ethereum.CallMsg) (uint64, error) {
 			if errors.Is(err, core.ErrIntrinsicGas) {
 				return true, nil, nil // Special case, raise gas limit
 			}
-			return true, nil, xerrors.Errorf("Bail out: %w", err)
+			return true, nil, fmt.Errorf("Bail out: %w", err)
 		}
 		return res.Failed(), res, nil //nolint:gocritic
 	}
@@ -191,7 +192,7 @@ func (e *EVMEmulator) EstimateGas(call ethereum.CallMsg) (uint64, error) {
 		// call or transaction will never be accepted no matter how much gas it is
 		// assigned. Return the error directly, don't struggle any more
 		if err != nil {
-			return 0, xerrors.Errorf("executable(mid): %w", err)
+			return 0, fmt.Errorf("executable(mid): %w", err)
 		}
 		if failed {
 			lo = mid
@@ -204,20 +205,29 @@ func (e *EVMEmulator) EstimateGas(call ethereum.CallMsg) (uint64, error) {
 	if hi == max {
 		failed, result, err := executable(hi)
 		if err != nil {
-			return 0, xerrors.Errorf("executable(hi): %w", err)
+			return 0, fmt.Errorf("executable(hi): %w", err)
 		}
 		if failed {
 			if result != nil && !errors.Is(result.Err, vm.ErrOutOfGas) {
 				if len(result.Revert()) > 0 {
 					return 0, newRevertError(result)
 				}
-				return 0, xerrors.Errorf("revert: %w", result.Err)
+				return 0, fmt.Errorf("revert: %w", result.Err)
 			}
 			// Otherwise, the specified gas cap is too low
-			return 0, xerrors.Errorf("gas required exceeds allowance (%d)", max)
+			return 0, fmt.Errorf("gas required exceeds allowance (%d)", max)
 		}
 	}
 	return hi, nil
+}
+
+func (e *EVMEmulator) PendingHeader() *types.Header {
+	return &types.Header{
+		Difficulty: &big.Int{},
+		Number:     new(big.Int).Add(e.BlockchainDB().GetNumber(), common.Big1),
+		GasLimit:   e.GasLimit(),
+		Time:       e.timestamp,
+	}
 }
 
 func (e *EVMEmulator) ChainContext() core.ChainContext {
@@ -239,16 +249,16 @@ func (e *EVMEmulator) callContract(call ethereum.CallMsg) (*core.ExecutionResult
 	}
 
 	msg := callMsg{call}
-	pendingHeader := e.BlockchainDB().GetPendingHeader()
 
 	// run the EVM code on a buffered state (so that writes are not committed)
 	statedb := e.StateDB().Buffered().StateDB()
 
-	return e.applyMessage(msg, statedb, pendingHeader)
+	return e.applyMessage(msg, statedb)
 }
 
-func (e *EVMEmulator) applyMessage(msg core.Message, statedb vm.StateDB, header *types.Header) (*core.ExecutionResult, error) {
-	blockContext := core.NewEVMBlockContext(header, e.ChainContext(), nil)
+func (e *EVMEmulator) applyMessage(msg core.Message, statedb vm.StateDB) (*core.ExecutionResult, error) {
+	pendingHeader := e.PendingHeader()
+	blockContext := core.NewEVMBlockContext(pendingHeader, e.ChainContext(), nil)
 	txContext := core.NewEVMTxContext(msg)
 	vmEnv := vm.NewEVM(blockContext, txContext, statedb, e.chainConfig, e.vmConfig())
 	gasPool := core.GasPool(msg.Gas())
@@ -266,11 +276,9 @@ func (e *EVMEmulator) GetIEVMBackend() vm.ISCPBackend {
 	return e.IEVMBackend
 }
 
+// SendTransaction updates the pending block to include the given transaction.
+// It returns an error if the transaction is invalid.
 func (e *EVMEmulator) SendTransaction(tx *types.Transaction) (*types.Receipt, error) {
-	buf := e.StateDB().Buffered()
-	statedb := buf.StateDB()
-	pendingHeader := e.BlockchainDB().GetPendingHeader()
-
 	sender, err := types.Sender(e.Signer(), tx)
 	if err != nil {
 		return nil, xerrors.Errorf("invalid transaction: %w", err)
@@ -280,35 +288,32 @@ func (e *EVMEmulator) SendTransaction(tx *types.Transaction) (*types.Receipt, er
 		return nil, xerrors.Errorf("invalid transaction nonce: got %d, want %d", tx.Nonce(), nonce)
 	}
 
+	buf := e.StateDB().Buffered()
+
+	pendingHeader := e.PendingHeader()
 	msg, err := tx.AsMessage(types.MakeSigner(e.chainConfig, pendingHeader.Number), pendingHeader.BaseFee)
 	if err != nil {
 		return nil, err
 	}
 
-	result, err := e.applyMessage(msg, statedb, pendingHeader)
+	statedb := buf.StateDB()
+
+	result, err := e.applyMessage(msg, statedb)
 	if err != nil {
 		return nil, err
 	}
 
-	cumulativeGasUsed := result.UsedGas
-	index := uint(0)
-	latest := e.BlockchainDB().GetLatestPendingReceipt()
-	if latest != nil {
-		cumulativeGasUsed += latest.CumulativeGasUsed
-		index = latest.TransactionIndex + 1
-	}
-
 	receipt := &types.Receipt{
 		Type:              tx.Type(),
-		CumulativeGasUsed: cumulativeGasUsed,
+		CumulativeGasUsed: result.UsedGas,
 		TxHash:            tx.Hash(),
 		GasUsed:           result.UsedGas,
 		Logs:              statedb.GetLogs(tx.Hash()),
-		BlockNumber:       pendingHeader.Number,
-		TransactionIndex:  index,
+		BlockNumber:       e.PendingHeader().Number,
 	}
 	receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
 	if result.Failed() {
+		fmt.Printf("%s - gas limit %d - gas used %d - refund %d\n", result.Err, msg.Gas(), result.UsedGas, statedb.GetRefund())
 		receipt.Status = types.ReceiptStatusFailed
 	} else {
 		receipt.Status = types.ReceiptStatusSuccessful
@@ -318,13 +323,10 @@ func (e *EVMEmulator) SendTransaction(tx *types.Transaction) (*types.Receipt, er
 	}
 
 	buf.Commit()
-	e.BlockchainDB().AddTransaction(tx, receipt)
+
+	e.BlockchainDB().AddTransaction(tx, receipt, e.timestamp)
 
 	return receipt, nil
-}
-
-func (e *EVMEmulator) MintBlock() {
-	e.BlockchainDB().MintBlock(e.timestamp)
 }
 
 // FilterLogs executes a log filter operation, blocking during execution and
@@ -338,16 +340,20 @@ func (e *EVMEmulator) getReceiptsInFilterRange(query *ethereum.FilterQuery) []*t
 	bc := e.BlockchainDB()
 
 	if query.BlockHash != nil {
-		blockNumber, ok := bc.GetBlockNumberByBlockHash(*query.BlockHash)
-		if !ok {
+		blockNumber := bc.GetBlockNumberByBlockHash(*query.BlockHash)
+		if blockNumber == nil {
 			return nil
 		}
-		return bc.GetReceiptsByBlockNumber(blockNumber)
+		receipt := bc.GetReceiptByBlockNumber(blockNumber)
+		if receipt == nil {
+			return nil
+		}
+		return []*types.Receipt{receipt}
 	}
 
 	// Initialize unset filter boundaries to run from genesis to chain head
 	first := big.NewInt(1) // skip genesis since it has no logs
-	last := new(big.Int).SetUint64(bc.GetNumber())
+	last := bc.GetNumber()
 	from := first
 	if query.FromBlock != nil && query.FromBlock.Cmp(first) >= 0 && query.FromBlock.Cmp(last) <= 0 {
 		from = query.FromBlock
@@ -358,10 +364,10 @@ func (e *EVMEmulator) getReceiptsInFilterRange(query *ethereum.FilterQuery) []*t
 	}
 
 	var receipts []*types.Receipt
-	{
-		to := to.Uint64()
-		for i := from.Uint64(); i <= to; i++ {
-			receipts = append(receipts, bc.GetReceiptsByBlockNumber(i)...)
+	for i := new(big.Int).Set(from); i.Cmp(to) <= 0; i = i.Add(i, common.Big1) {
+		receipt := bc.GetReceiptByBlockNumber(i)
+		if receipt != nil {
+			receipts = append(receipts, receipt)
 		}
 	}
 	return receipts

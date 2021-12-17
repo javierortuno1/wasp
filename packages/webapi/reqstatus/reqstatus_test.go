@@ -16,17 +16,11 @@ import (
 
 type mockChain struct{}
 
-var _ chain.ChainRequests = &mockChain{}
-
 func (m *mockChain) GetRequestProcessingStatus(id iscp.RequestID) chain.RequestProcessingStatus {
 	return chain.RequestProcessingStatusCompleted
 }
 
-func (m *mockChain) AttachToRequestProcessed(func(iscp.RequestID)) (attachID *events.Closure) {
-	panic("not implemented")
-}
-
-func (m *mockChain) DetachFromRequestProcessed(attachID *events.Closure) {
+func (m *mockChain) EventRequestProcessed() *events.Event {
 	panic("not implemented")
 }
 
