@@ -124,7 +124,7 @@ contained in the account can only be moved by the entity behind that agent ID:
   that smart contract. Note that the smart contract may reside on the same chain
   or another chain.
 
-[![Example situation. There are two chains deployed, with three smart contracts and one address.](/img/tutorial/accounts.png)](/img/tutorial/accounts.png)
+-> [![Example situation. There are two chains deployed, with three smart contracts and one address.](/img/tutorial/accounts.png)](/img/tutorial/accounts.png)
 
 The picture illustrates an example situation. There are two chains deployed,
 with respective IDs `Pmc7iH8b..` and `Klm314noP8..`. The pink chain `Pmc7iH8b..`
